@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>DEAD ZONE: Выживание</title>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <style>
+        :root {
+            --bg: #0d0f12;
+            --panel: #161a20;
+            --text: #e0e6ed;
+            --accent: #ff3b30;
+            --green: #32d74b;
+            --yellow: #ffd60a;
+            --purple: #bf5af2;
+        }
+        * { box-sizing: border-box; user-select: none; -webkit-tap-highlight-color: transparent; }
+        body {
+            margin: 0; padding: 12px; background: var(--bg); color: var(--text);
+            font-family: 'Courier New', Courier, monospace; display: flex;
+            flex-direction: column; height: 100vh; overflow: hidden;
+        }
+        /* Эффект паники (тряска экрана) */
+        @keyframes panicShake {
+            0% { transform: translate(1px, 1px) rotate(0deg); }
+            25% { transform: translate(-2px, -1px) rotate(-0.5deg); }
+            50% { transform: translate(2px, 1px) rotate(0.5deg); }
+            75% { transform: translate(-1px, 2px) rotate(0deg); }
+            100% { transform: translate(1px, -2px) rotate(-0.5deg); }
+        }
+        .panic-mode { animation: panicShake 0.3s infinite; filter: contrast(130%) hue-rotate(-15deg); }
+
+        header { text-align: center; border-bottom: 1px solid #2c323b; padding-bottom: 8px; margin-bottom: 10px; }
+        h1 { margin: 0; font-size: 18px; color: var(--accent); letter-spacing: 2px; }
+        .day-counter { font-size: 12px; color: #8e98a4; }
+
+        /* Шкалы состояния */
+        .stats-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 10px; }
+        .stat-box { background: var(--panel); padding: 8px; border-radius: 6px; border: 1px solid #252a32; }
+        .stat-label { font-size: 11px; display: flex; justify-content: space-between; margin-bottom: 4px; }
+        .bar-bg { width: 100%; height: 6px; background: #252a32; border-radius: 3px; overflow: hidden; }
+        .bar-fill { height: 100%; transition: width 0.3s ease; }
+
+        /* Лог событий (радар/терминал) */
+        .log-box {
+            flex: 1; background: #08090b; border: 1px solid #252a32; border-radius: 6px;
+            padding: 10px; overflow-y: auto; font-size: 13px; line-height: 1.4;
+            margin-bottom: 10px; display: flex; flex-direction: column; gap: 6px;
+        }
+        .log-entry { border-left: 2px solid #444; padding-left: 8px; }
+        .log-danger { border-color: var(--accent); color: #ff8a84; }
+        .log-good { border-color: var(--green); color: #8ce99a; }
+        .log-weird { border-color: var(--purple); color: #e599f7; }
+
+        /* Инвентарь */
+        .inventory {
+            display: flex; gap: 6px; overflow-x: auto; padding-bottom: 6px; margin-bottom: 8px;
+            min-height: 44px;
+        }
+        .item-chip {
+            background: var(--panel); border: 1px solid #3a414d; padding: 6px 10px;
+            border-radius: 6px; font-size: 12px; white-space: nowrap; cursor: pointer;
+        }
+        .item-chip:active { background: #2c333d; }
+
+        /* Кнопки действий */
+        .actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+        button {
+            background: var(--panel); color: var(--text); border: 1px solid #3a414d;
+            padding: 12px 8px; border-radius: 8px; font-family: inherit; font-size: 13px;
+            font-weight: bold; cursor: pointer; transition: 0.1s;
+        }
+        button:active { transform: scale(0.96); background: #252b34; }
+        .btn-danger { border-color: var(--accent); color: var(--accent); }
+        .btn-craft { border-color: var(--yellow); color: var(--yellow); }
+
+        /* Экран смерти */
+        #game-over {
+            display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.92);
+            flex-direction: column; align-items: center; justify-content: center;
+            text-align: center; padding: 20px; z-index: 100;
+        }
+        #game-over h2 { color: var(--accent); font-size: 28px; margin-bottom: 10px; }
+    </style>
+</head>
+<body>
+
+<header>
+    <h1>☣️ DEAD ZONE</h1>
+    <div class="day-counter">ДЕНЬ: <span id="day">1</span> | УБИТО ЗОМБИ: <span id="kills">0</span></div>
+</header>
+
+<div class="stats-grid">
+    <div class="stat-box">
+        <div class="stat-label"><span>❤️ Здоровье</span><span id="hp-val">100%</span></div>
+        <div class="bar-bg"><div id="hp-bar" class="bar-fill" style="width: 100%; background: var(--green);"></div></div>
+    </div>
+    <div class="stat-box">
+        <div class="stat-label"><span>🔊 Шум (Орда)</span><span id="noise-val">0%</span></div>
+        <div class="bar-bg"><div id="noise-bar" class="bar-fill" style="width: 0%; background: var(--yellow);"></div></div>
+    </div>
+    <div class="stat-box">
+        <div class="stat-label"><span>🧠 Паника</span><span id="panic-val">10%</span></div>
+        <div class="bar-bg"><div id="panic-bar" class="bar-fill" style="width: 10%; background: var(--purple);"></div></div>
+    </div>
+    <div class="stat-box">
+        <div class="stat-label"><span>🛡️ Защита базы</span><span id="def-val">10%</span></div>
+        <div class="bar-bg"><div id="def-bar" class="bar-fill" style="width: 10%; background: #0a84ff;"></div></div>
+    </div>
+</div>
+
+<div class="log-box" id="log">
+    <div class="log-entry">Вы забаррикадировались в старом гараже. Снаружи слышны стоны...</div>
+</div>
+
+<div style="font-size: 11px; color: #8e98a4; margin-bottom: 4px;">🎒 РЮКЗАК (нажми на предмет, чтобы использовать):</div>
+<div class="inventory" id="inventory"></div>
+
+<div class="actions">
+    <button onclick="lootQuiet()">🤫 Тихо лутать</button>
+    <button class="btn-danger" onclick="lootLoud()">💥 Выбить дверь</button>
+    <button onclick="fortify()">🔨 Укрепить базу</button>
+    <button class="btn-craft" onclick="craftWeapon()">🔧 Скрафтить хлам</button>
+</div>
+
+<div id="game-over">
+    <h2>ВЫ ПОГИБЛИ</h2>
+    <p id="death-reason" style="color: #aaa; margin-bottom: 20px;"></p>
+    <button onclick="restartGame()" style="padding: 15px 30px; border-color: var(--green); color: var(--green);">🔄 НАЧАТЬ ЗАНОВО</button>
+</div>
+
+<script>
+    // Инициализация Telegram WebApp
+    const tg = window.Telegram.WebApp;
+    tg.expand();
+
+    let state = {
+        hp: 100, noise: 0, panic: 10, def: 10, day: 1, kills: 0,
+        items: [
+            { name: "🦆 Резиновая утка", type: "duck", desc: "Крякает! Снижает шум на 30%" },
+            { name: "🍫 Старый шоколад", type: "food", desc: "+15 HP, -20 Паники" }
+        ]
+    };
+
+    const weirdLoot = [
+        { name: "🦆 Резиновая утка", type: "duck", desc: "Отвлекает зомби (-30% шума)" },
+        { name: "🥫 Банка огурцов", type: "food", desc: "+20 HP, -10 Паники" },
+        { name: "📻 Сломанное радио", type: "junk", desc: "Деталь для крафта" },
+        { name: "🍳 Чугунная сковорода", type: "junk", desc: "Деталь для крафта" },
+        { name: "💊 Успокоительное", type: "med", desc: "-45% Паники" },
+        { name: "🩹 Бинт и спирт", type: "heal", desc: "+35 HP" }
+    ];
+
+    function addLog(text, type = "") {
+        const log = document.getElementById("log");
+        const div = document.createElement("div");
+        div.className = "log-entry " + type;
+        div.innerText = `[День ${state.day}] ${text}`;
+        log.prepend(div);
+    }
+
+    function updateUI() {
+        document.getElementById("hp-val").innerText = state.hp + "%";
+        document.getElementById("hp-bar").style.width = state.hp + "%";
+        document.getElementById("noise-val").innerText = state.noise + "%";
+        document.getElementById("noise-bar").style.width = state.noise + "%";
+        document.getElementById("panic-val").innerText = state.panic + "%";
+        document.getElementById("panic-bar").style.width = state.panic + "%";
+        document.getElementById("def-val").innerText = state.def + "%";
+        document.getElementById("def-bar").style.width = state.def + "%";
+        document.getElementById("day").innerText = state.day;
+        document.getElementById("kills").innerText = state.kills;
+
+        // Эффект паники на весь экран
+        if (state.panic >= 70) document.body.classList.add("panic-mode");
+        else document.body.classList.remove("panic-mode");
+
+        // Рендер рюкзака
+        const inv = document.getElementById("inventory");
+        inv.innerHTML = "";
+        if (state.items.length === 0) {
+            inv.innerHTML = "<span style='color:#555; font-size:12px;'>Пусто...</span>";
+        }
+        state.items.forEach((item, idx) => {
+            const btn = document.createElement("div");
+            btn.className = "item-chip";
+            btn.innerText = item.name;
+            btn.onclick = () => useItem(idx);
+            inv.appendChild(btn);
+        });
+
+        checkGameOver();
+    }
+
+    function nextTurn() {
+        state.day++;
+        state.panic = Math.min(100, state.panic + 6);
+        
+        // Проверка на приход орды из-за шума
+        if (state.noise >= 100) {
+            let dmg = Math.max(15, 50 - Math.floor(state.def / 2));
+            state.hp = Math.max(0, state.hp - dmg);
+            state.noise = 20;
+            state.kills += 5;
+            addLog(`🚨 ОРДА ПРИШЛА НА ШУМ! Вы отбились, но потеряли ${dmg} HP!`, "log-danger");
+            if (tg.HapticFeedback) tg.HapticFeedback.notificationOccurred("error");
+        }
+        updateUI();
+    }
+
+    function lootQuiet() {
+        state.noise = Math.min(100, state.noise + 10);
+        if (Math.random() > 0.35) {
+            const item = weirdLoot[Math.floor(Math.random() * weirdLoot.length)];
+            state.items.push(item);
+            addLog(`Вы тихо обыскали машину и нашли: ${item.name}`, "log-good");
+        } else {
+            addLog("Ничего полезного, только пустые бутылки.");
+        }
+        nextTurn();
+    }
+
+    function lootLoud() {
+        state.noise = Math.min(100, state.noise + 35);
+        const item1 = weirdLoot[Math.floor(Math.random() * weirdLoot.length)];
+        const item2 = weirdLoot[Math.floor(Math.random() * weirdLoot.length)];
+        state.items.push(item1, item2);
+        state.kills += 1;
+        addLog(`💥 Вы вынесли дверь с ноги! Убили 1 зомби и урвали: ${item1.name} и ${item2.name}!`, "log-weird");
+        if (tg.HapticFeedback) tg.HapticFeedback.impactOccurred("heavy");
+        nextTurn();
+    }
+
+    function fortify() {
+        state.noise = Math.min(100, state.noise + 15);
+        state.def = Math.min(100, state.def + 15);
+        addLog("🔨 Вы заколотили окна досками. Защита базы выросла!", "log-good");
+        nextTurn();
+    }
+
+    function craftWeapon() {
+        const junkIndex = state.items.findIndex(i => i.type === "junk");
+        if (junkIndex !== -1) {
+            state.items.splice(junkIndex, 1);
+            state.def = Math.min(100, state.def + 20);
+            state.kills += 3;
+            addLog("🔧 Вы примотали сковородку к швабре! Отличное оружие (+20% защиты, +3 фрага)!", "log-weird");
+        } else {
+            addLog("❌ Нужен хлам (радио или сковорода) для крафта!", "log-danger");
+        }
+        updateUI();
+    }
+
+    function useItem(idx) {
+        const item = state.items[idx];
+        if (item.type === "duck") {
+            state.noise = Math.max(0, state.noise - 35);
+            addLog("🦆 КРЯ! Вы кинули уточку в кусты. Зомби ушли туда. Шум снижен!", "log-weird");
+        } else if (item.type === "food") {
+            state.hp = Math.min(100, state.hp + 15);
+            state.panic = Math.max(0, state.panic - 20);
+            addLog("😋 Вкусно! Здоровье и нервы немного восстановились.", "log-good");
+        } else if (item.type === "med") {
+            state.panic = Math.max(0, state.panic - 45);
+            addLog("💊 Таблетки подействовали. Тряска рук прекратилась.", "log-good");
+        } else if (item.type === "heal") {
+            state.hp = Math.min(100, state.hp + 35);
+            addLog("🩹 Раны перевязаны (+35 HP).", "log-good");
+        } else {
+            addLog("Этот хлам лучше использовать через кнопку 'Скрафтить'.");
+            return;
+        }
+        state.items.splice(idx, 1);
+        if (tg.HapticFeedback) tg.HapticFeedback.impactOccurred("light");
+        updateUI();
+    }
+
+    function checkGameOver() {
+        if (state.hp <= 0 || state.panic >= 100) {
+            document.getElementById("game-over").style.display = "flex";
+            document.body.classList.remove("panic-mode");
+            document.getElementById("death-reason").innerText = state.hp <= 0 
+                ? `Вас съели на ${state.day}-й день. Убито зомби: ${state.kills}.`
+                : `Вы сошли с ума от паники на ${state.day}-й день.`;
+        }
+    }
+
+    function restartGame() {
+        state = {
+            hp: 100, noise: 0, panic: 10, def: 10, day: 1, kills: 0,
+            items: [{ name: "🦆 Резиновая утка", type: "duck" }, { name: "🍫 Старый шоколад", type: "food" }]
+        };
+        document.getElementById("log").innerHTML = '<div class="log-entry">Новая попытка выжить...</div>';
+        document.getElementById("game-over").style.display = "none";
+        updateUI();
+    }
+
+    updateUI();
+</script>
+</body>
+</html>
